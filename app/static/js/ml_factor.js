@@ -8,6 +8,28 @@ let factorsList = [];
 let modelsList = [];
 let optimizationResults = null;
 
+// 分页状态
+let pagination = {
+    factors: {
+        currentPage: 1,
+        pageSize: 10,
+        totalItems: 0,
+        totalPages: 0
+    },
+    models: {
+        currentPage: 1,
+        pageSize: 10,
+        totalItems: 0,
+        totalPages: 0
+    },
+    selection: {
+        currentPage: 1,
+        pageSize: 20,
+        totalItems: 0,
+        totalPages: 0
+    }
+};
+
 // API基础URL
 const API_BASE_URL = '/api/ml-factor';
 
@@ -68,6 +90,101 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+/**
+ * 渲染分页控件
+ */
+function renderPagination(containerSelector, paginationType, onPageChange) {
+    const container = document.querySelector(containerSelector);
+    if (!container) return;
+
+    const pageInfo = pagination[paginationType];
+    if (pageInfo.totalPages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = `
+        <nav aria-label="分页导航">
+            <ul class="pagination justify-content-center mb-0">
+                <li class="page-item ${pageInfo.currentPage === 1 ? 'disabled' : ''}">
+                    <a class="page-link" href="#" data-page="${pageInfo.currentPage - 1}">上一页</a>
+                </li>
+    `;
+
+    // 显示页码
+    const startPage = Math.max(1, pageInfo.currentPage - 2);
+    const endPage = Math.min(pageInfo.totalPages, pageInfo.currentPage + 2);
+
+    if (startPage > 1) {
+        html += `<li class="page-item"><a class="page-link" href="#" data-page="1">1</a></li>`;
+        if (startPage > 2) {
+            html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+        }
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+        html += `
+            <li class="page-item ${i === pageInfo.currentPage ? 'active' : ''}">
+                <a class="page-link" href="#" data-page="${i}">${i}</a>
+            </li>
+        `;
+    }
+
+    if (endPage < pageInfo.totalPages) {
+        if (endPage < pageInfo.totalPages - 1) {
+            html += `<li class="page-item disabled"><span class="page-link">...</span></li>`;
+        }
+        html += `<li class="page-item"><a class="page-link" href="#" data-page="${pageInfo.totalPages}">${pageInfo.totalPages}</a></li>`;
+    }
+
+    html += `
+                <li class="page-item ${pageInfo.currentPage === pageInfo.totalPages ? 'disabled' : ''}">
+                    <a class="page-link" href="#" data-page="${pageInfo.currentPage + 1}">下一页</a>
+                </li>
+            </ul>
+        </nav>
+        <div class="text-center mt-2 text-muted small">
+            共 ${pageInfo.totalItems} 条，第 ${pageInfo.currentPage} / ${pageInfo.totalPages} 页
+        </div>
+    `;
+
+    container.innerHTML = html;
+
+    // 绑定点击事件
+    container.querySelectorAll('.page-link').forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            const page = parseInt(this.getAttribute('data-page'));
+            if (page && page !== pageInfo.currentPage && page >= 1 && page <= pageInfo.totalPages) {
+                pageInfo.currentPage = page;
+                onPageChange(page);
+            }
+        });
+    });
+}
+
+/**
+ * 分页数据
+ */
+function paginateArray(array, page, pageSize) {
+    const start = (page - 1) * pageSize;
+    const end = start + pageSize;
+    return array.slice(start, end);
+}
+
+/**
+ * 更新分页信息
+ */
+function updatePaginationInfo(paginationType, totalItems) {
+    const pageInfo = pagination[paginationType];
+    pageInfo.totalItems = totalItems;
+    pageInfo.totalPages = Math.ceil(totalItems / pageInfo.pageSize);
+    // 确保当前页不超过总页数
+    if (pageInfo.currentPage > pageInfo.totalPages && pageInfo.totalPages > 0) {
+        pageInfo.currentPage = pageInfo.totalPages;
+    }
 }
 
 // ========================================
@@ -198,14 +315,32 @@ function showSettings() {
 /**
  * 加载因子列表
  */
-async function loadFactorsList() {
+async function loadFactorsList(page = null) {
     try {
+        if (page === null) {
+            page = pagination.factors.currentPage;
+        }
+
         const response = await fetch(`${API_BASE_URL}/factors/list`);
         const data = await response.json();
 
         if (data.success) {
             factorsList = data.data.factors || [];
-            renderFactorsTable(factorsList);
+
+            // 更新分页信息
+            updatePaginationInfo('factors', factorsList.length);
+
+            // 获取当前页数据
+            const pageData = paginateArray(
+                factorsList,
+                pagination.factors.currentPage,
+                pagination.factors.pageSize
+            );
+
+            renderFactorsTable(pageData);
+
+            // 渲染分页控件
+            renderPagination('#factors-pagination', 'factors', loadFactorsList);
         } else {
             showNotification('加载因子列表失败: ' + data.message, 'danger');
         }
@@ -331,14 +466,32 @@ function deleteFactor(factorId) {
 /**
  * 加载模型列表
  */
-async function loadModelsList() {
+async function loadModelsList(page = null) {
     try {
+        if (page === null) {
+            page = pagination.models.currentPage;
+        }
+
         const response = await fetch(`${API_BASE_URL}/models/list`);
         const data = await response.json();
 
         if (data.success) {
             modelsList = data.data.models || [];
-            renderModelsTable(modelsList);
+
+            // 更新分页信息
+            updatePaginationInfo('models', modelsList.length);
+
+            // 获取当前页数据
+            const pageData = paginateArray(
+                modelsList,
+                pagination.models.currentPage,
+                pagination.models.pageSize
+            );
+
+            renderModelsTable(pageData);
+
+            // 渲染分页控件
+            renderPagination('#models-pagination', 'models', loadModelsList);
         } else {
             showNotification('加载模型列表失败: ' + data.message, 'danger');
         }
