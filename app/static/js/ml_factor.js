@@ -60,6 +60,16 @@ function formatPercent(num, decimals = 2) {
     return (Number(num) * 100).toFixed(decimals) + '%';
 }
 
+/**
+ * HTML转义防止XSS
+ */
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // ========================================
 // 页面导航
 // ========================================
@@ -221,17 +231,21 @@ function renderFactorsTable(factors) {
 
     factors.forEach(factor => {
         const row = document.createElement('tr');
+        const factorId = escapeHtml(factor.factor_id || '');
+        const factorName = escapeHtml(factor.factor_name || '');
+        const factorType = escapeHtml(factor.factor_type || '');
+
         row.innerHTML = `
-            <td>${factor.factor_id}</td>
-            <td>${factor.factor_name}</td>
-            <td><span class="badge bg-primary">${factor.factor_type}</span></td>
+            <td>${factorId}</td>
+            <td>${factorName}</td>
+            <td><span class="badge bg-primary">${factorType}</span></td>
             <td><span class="badge bg-success">活跃</span></td>
-            <td>${formatDate(factor.create_time)}</td>
+            <td>${formatDate(factor.created_at || factor.create_time)}</td>
             <td>
-                <button class="btn btn-sm btn-outline-primary" onclick="viewFactor('${factor.factor_id}')">
+                <button class="btn btn-sm btn-outline-primary" onclick="viewFactor('${factorId}')">
                     <i class="bi bi-eye"></i>
                 </button>
-                <button class="btn btn-sm btn-outline-danger" onclick="deleteFactor('${factor.factor_id}')">
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteFactor('${factorId}')">
                     <i class="bi bi-trash"></i>
                 </button>
             </td>
@@ -350,21 +364,26 @@ function renderModelsTable(models) {
 
     models.forEach(model => {
         const row = document.createElement('tr');
-        const statusBadge = model.is_trained ?
-            '<span class="badge bg-success">已训练</span>' :
-            '<span class="badge bg-secondary">未训练</span>';
+        const modelId = escapeHtml(model.model_id || '');
+        const modelName = escapeHtml(model.model_name || '');
+        const modelType = escapeHtml(model.model_type || '');
+
+        // 使用is_active作为状态判断，因为没有is_trained字段
+        const statusBadge = model.is_active ?
+            '<span class="badge bg-success">活跃</span>' :
+            '<span class="badge bg-secondary">未激活</span>';
 
         row.innerHTML = `
-            <td>${model.model_id}</td>
-            <td>${model.model_name}</td>
-            <td><span class="badge bg-info">${model.model_type}</span></td>
+            <td>${modelId}</td>
+            <td>${modelName}</td>
+            <td><span class="badge bg-info">${modelType}</span></td>
             <td>${statusBadge}</td>
-            <td>${formatDate(model.create_time)}</td>
+            <td>${formatDate(model.created_at || model.create_time)}</td>
             <td>
-                <button class="btn btn-sm btn-outline-success" onclick="trainModel('${model.model_id}')">
+                <button class="btn btn-sm btn-outline-success" onclick="trainModel('${modelId}')">
                     <i class="bi bi-play"></i> 训练
                 </button>
-                <button class="btn btn-sm btn-outline-primary" onclick="viewModel('${model.model_id}')">
+                <button class="btn btn-sm btn-outline-primary" onclick="viewModel('${modelId}')">
                     <i class="bi bi-eye"></i>
                 </button>
             </td>
@@ -759,14 +778,22 @@ function initBacktestPage() {
     document.getElementById('backtest-end-date').value = endDate.toISOString().split('T')[0];
     document.getElementById('backtest-start-date').value = startDate.toISOString().split('T')[0];
 
-    // 初始化图表
+    // 初始化图表 - 先销毁旧图表防止内存泄漏
+    if (backtestChart) {
+        backtestChart.dispose();
+        backtestChart = null;
+    }
     backtestChart = initBacktestChart('backtest-chart');
 
-    // 绑定表单提交事件
-    document.getElementById('backtest-form').addEventListener('submit', async function(e) {
-        e.preventDefault();
-        await performBacktest();
-    });
+    // 绑定表单提交事件（只绑定一次）
+    const form = document.getElementById('backtest-form');
+    if (form && !form.hasAttribute('data-bound')) {
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            await performBacktest();
+        });
+        form.setAttribute('data-bound', 'true');
+    }
 }
 
 /**

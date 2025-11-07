@@ -860,35 +860,47 @@ def run_backtest():
     """运行回测"""
     try:
         data = request.get_json()
-        
+
         # 参数验证
-        strategy_config = data.get('strategy_config')
         start_date = data.get('start_date')
         end_date = data.get('end_date')
-        
-        if not all([strategy_config, start_date, end_date]):
-            return jsonify({'error': '缺少必需参数: strategy_config, start_date, end_date'}), 400
-        
+
+        if not all([start_date, end_date]):
+            return jsonify({'error': '缺少必需参数: start_date, end_date'}), 400
+
         initial_capital = data.get('initial_capital', 1000000.0)
-        rebalance_frequency = data.get('rebalance_frequency', 'monthly')
-        
+        rebalance_freq = data.get('rebalance_freq', '1W')  # 匹配前端字段名
+        strategy = data.get('strategy', 'factor_based')
+        factor_list = data.get('factor_list', [])
+        model_ids = data.get('model_ids', [])
+
+        # 构建策略配置
+        strategy_config = {
+            'strategy_type': strategy,
+            'factor_list': factor_list,
+            'model_ids': model_ids,
+            'top_n': 50
+        }
+
         # 执行回测
         result = get_backtest_engine().run_backtest(
             strategy_config,
             start_date,
             end_date,
             initial_capital,
-            rebalance_frequency
+            rebalance_freq
         )
-        
+
         if 'error' in result:
-            return jsonify({'error': result['error']}), 500
-        
-        return jsonify(result)
-        
+            return jsonify({'success': False, 'error': result['error']}), 500
+
+        return jsonify({'success': True, 'data': result})
+
     except Exception as e:
         logger.error(f"回测失败: {e}")
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @ml_factor_bp.route('/backtest/compare', methods=['POST'])
@@ -925,15 +937,15 @@ def compare_strategies():
 def get_system_stats():
     """获取系统统计信息"""
     try:
-        from app.models.factor import FactorDefinition, FactorValue
-        from app.models.ml_model import MLModel, MLPrediction
+        from app.models import FactorDefinition, FactorValues, MLModelDefinition
         from datetime import datetime
 
         # 获取活跃因子数量
         active_factors = FactorDefinition.query.filter_by(is_active=True).count()
 
-        # 获取已训练模型数量
-        trained_models = MLModel.query.filter_by(is_trained=True).count()
+        # 获取活跃模型数量（注意：MLModelDefinition没有is_trained字段）
+        # 使用is_active作为替代
+        active_models = MLModelDefinition.query.filter_by(is_active=True).count()
 
         # 获取今日选股数量（简化实现）
         today_selections = 0
@@ -942,14 +954,14 @@ def get_system_stats():
         portfolios = 0
 
         # 获取最后更新时间
-        last_factor_value = FactorValue.query.order_by(FactorValue.trade_date.desc()).first()
+        last_factor_value = FactorValues.query.order_by(FactorValues.trade_date.desc()).first()
         last_update_time = last_factor_value.trade_date if last_factor_value else None
 
         result = {
             'success': True,
             'data': {
                 'active_factors': active_factors,
-                'trained_models': trained_models,
+                'trained_models': active_models,  # 实际是活跃模型数
                 'today_selections': today_selections,
                 'portfolios': portfolios,
                 'last_update_time': last_update_time.isoformat() if last_update_time else None
@@ -960,7 +972,10 @@ def get_system_stats():
 
     except Exception as e:
         logger.error(f"获取系统统计信息失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         # 返回默认值
+        from datetime import datetime
         return jsonify({
             'success': True,
             'data': {
