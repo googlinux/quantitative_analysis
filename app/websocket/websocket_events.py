@@ -240,4 +240,137 @@ def get_connection_stats():
                 'remote_addr': info['remote_addr']
             } for client_id, info in connected_clients.items()
         }
-    } 
+    }
+
+
+# ==================== ML因子系统专用WebSocket事件 ====================
+
+@socketio.on('subscribe_quotes')
+def handle_subscribe_quotes(data):
+    """订阅股票实时行情"""
+    client_id = request.sid
+    symbols = data.get('symbols', [])
+
+    if client_id not in connected_clients:
+        emit('error', {'message': '客户端未连接'})
+        return
+
+    for symbol in symbols:
+        room_name = f"quotes_{symbol}"
+        join_room(room_name)
+        connected_clients[client_id]['subscriptions'].add(room_name)
+
+        if room_name not in room_subscriptions:
+            room_subscriptions[room_name] = set()
+        room_subscriptions[room_name].add(client_id)
+
+    logger.info(f"客户端 {client_id} 订阅行情: {symbols}")
+    emit('subscribed_quotes', {
+        'symbols': symbols,
+        'message': '订阅成功'
+    })
+
+@socketio.on('unsubscribe_quotes')
+def handle_unsubscribe_quotes(data):
+    """取消订阅股票实时行情"""
+    client_id = request.sid
+    symbols = data.get('symbols', [])
+
+    for symbol in symbols:
+        room_name = f"quotes_{symbol}"
+        leave_room(room_name)
+
+        if client_id in connected_clients:
+            connected_clients[client_id]['subscriptions'].discard(room_name)
+
+        if room_name in room_subscriptions:
+            room_subscriptions[room_name].discard(client_id)
+            if not room_subscriptions[room_name]:
+                del room_subscriptions[room_name]
+
+    logger.info(f"客户端 {client_id} 取消订阅行情: {symbols}")
+    emit('unsubscribed_quotes', {
+        'symbols': symbols,
+        'message': '取消订阅成功'
+    })
+
+
+# ML系统事件广播函数
+
+def emit_system_status_update(stats, timestamp=None):
+    """发送系统状态更新"""
+    if timestamp is None:
+        timestamp = datetime.now().isoformat()
+
+    socketio.emit('system_status_update', {
+        'stats': stats,
+        'timestamp': timestamp
+    }, broadcast=True)
+    logger.debug(f"广播系统状态更新: {stats}")
+
+def emit_realtime_quote(symbol, quote_data):
+    """发送实时行情数据"""
+    room_name = f"quotes_{symbol}"
+    if room_name in room_subscriptions:
+        socketio.emit('realtime_quote', {
+            'symbol': symbol,
+            'data': quote_data,
+            'timestamp': datetime.now().isoformat()
+        }, room=room_name)
+
+def emit_factor_calculation_complete(factor_id, result):
+    """发送因子计算完成通知"""
+    socketio.emit('factor_calculation_complete', {
+        'factor_id': factor_id,
+        'result': result,
+        'timestamp': datetime.now().isoformat()
+    }, broadcast=True)
+    logger.info(f"广播因子计算完成: {factor_id}")
+
+def emit_model_training_progress(model_id, progress, current_step=None):
+    """发送模型训练进度"""
+    socketio.emit('model_training_progress', {
+        'model_id': model_id,
+        'progress': progress,
+        'current_step': current_step,
+        'timestamp': datetime.now().isoformat()
+    }, broadcast=True)
+    logger.debug(f"广播模型训练进度: {model_id} - {progress}%")
+
+def emit_model_training_complete(model_id, metrics):
+    """发送模型训练完成通知"""
+    socketio.emit('model_training_complete', {
+        'model_id': model_id,
+        'metrics': metrics,
+        'timestamp': datetime.now().isoformat()
+    }, broadcast=True)
+    logger.info(f"广播模型训练完成: {model_id}")
+
+def emit_backtest_progress(backtest_id, progress, current_date=None):
+    """发送回测进度"""
+    socketio.emit('backtest_progress', {
+        'backtest_id': backtest_id,
+        'progress': progress,
+        'current_date': current_date,
+        'timestamp': datetime.now().isoformat()
+    }, broadcast=True)
+    logger.debug(f"广播回测进度: {backtest_id} - {progress}%")
+
+def emit_backtest_complete(backtest_id, results):
+    """发送回测完成通知"""
+    socketio.emit('backtest_complete', {
+        'backtest_id': backtest_id,
+        'results': results,
+        'timestamp': datetime.now().isoformat()
+    }, broadcast=True)
+    logger.info(f"广播回测完成: {backtest_id}")
+
+def emit_alert_message(level, message, details=None):
+    """发送警报消息"""
+    socketio.emit('alert_message', {
+        'level': level,  # info, warning, danger
+        'message': message,
+        'details': details,
+        'timestamp': datetime.now().isoformat()
+    }, broadcast=True)
+    logger.info(f"广播警报消息: [{level}] {message}") 

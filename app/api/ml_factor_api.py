@@ -10,6 +10,17 @@ from app.services.stock_scoring import StockScoringEngine
 from app.services.portfolio_optimizer import PortfolioOptimizer
 from app.services.backtest_engine import BacktestEngine
 
+# WebSocket事件发送
+from app.websocket.websocket_events import (
+    emit_model_training_progress,
+    emit_model_training_complete,
+    emit_backtest_progress,
+    emit_backtest_complete,
+    emit_factor_calculation_complete,
+    emit_system_status_update,
+    emit_alert_message
+)
+
 # 创建蓝图
 ml_factor_bp = Blueprint('ml_factor', __name__, url_prefix='/api/ml-factor')
 
@@ -248,22 +259,30 @@ def train_ml_model():
     """训练机器学习模型"""
     try:
         data = request.get_json()
-        
+
         # 参数验证
         model_id = data.get('model_id')
         start_date = data.get('start_date')
         end_date = data.get('end_date')
-        
+
         if not all([model_id, start_date, end_date]):
             return jsonify({'error': '缺少必需参数: model_id, start_date, end_date'}), 400
-        
+
+        # 发送训练开始通知
+        emit_model_training_progress(model_id, 0, '开始训练')
+        emit_alert_message('info', f'模型 {model_id} 开始训练')
+
         # 训练模型
         result = get_ml_manager().train_model(model_id, start_date, end_date)
-        
+
         if result['success']:
             # 转换numpy类型为Python原生类型
             metrics = convert_numpy_types(result.get('metrics', {}))
-            
+
+            # 发送训练完成通知
+            emit_model_training_complete(model_id, metrics)
+            emit_alert_message('success', f'模型 {model_id} 训练完成')
+
             return jsonify({
                 'success': True,
                 'message': f"模型训练完成: {model_id}",
@@ -274,10 +293,13 @@ def train_ml_model():
                 'model_size': '2.3MB'  # 模拟数据
             })
         else:
+            # 发送训练失败通知
+            emit_alert_message('danger', f'模型 {model_id} 训练失败: {result["error"]}')
             return jsonify({'error': result['error']}), 500
-        
+
     except Exception as e:
         logger.error(f"训练机器学习模型失败: {e}")
+        emit_alert_message('danger', f'模型训练异常: {str(e)}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -882,6 +904,13 @@ def run_backtest():
             'top_n': 50
         }
 
+        # 生成回测ID
+        backtest_id = f"backtest_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        # 发送回测开始通知
+        emit_backtest_progress(backtest_id, 0, start_date)
+        emit_alert_message('info', f'回测开始: {start_date} 至 {end_date}')
+
         # 执行回测
         result = get_backtest_engine().run_backtest(
             strategy_config,
@@ -892,7 +921,13 @@ def run_backtest():
         )
 
         if 'error' in result:
+            # 发送回测失败通知
+            emit_alert_message('danger', f'回测失败: {result["error"]}')
             return jsonify({'success': False, 'error': result['error']}), 500
+
+        # 发送回测完成通知
+        emit_backtest_complete(backtest_id, result)
+        emit_alert_message('success', '回测完成')
 
         return jsonify({'success': True, 'data': result})
 
@@ -900,6 +935,7 @@ def run_backtest():
         logger.error(f"回测失败: {e}")
         import traceback
         logger.error(traceback.format_exc())
+        emit_alert_message('danger', f'回测异常: {str(e)}')
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -957,16 +993,21 @@ def get_system_stats():
         last_factor_value = FactorValues.query.order_by(FactorValues.trade_date.desc()).first()
         last_update_time = last_factor_value.trade_date if last_factor_value else None
 
+        stats_data = {
+            'active_factors': active_factors,
+            'trained_models': active_models,  # 实际是活跃模型数
+            'today_selections': today_selections,
+            'portfolios': portfolios,
+            'last_update_time': last_update_time.isoformat() if last_update_time else None
+        }
+
         result = {
             'success': True,
-            'data': {
-                'active_factors': active_factors,
-                'trained_models': active_models,  # 实际是活跃模型数
-                'today_selections': today_selections,
-                'portfolios': portfolios,
-                'last_update_time': last_update_time.isoformat() if last_update_time else None
-            }
+            'data': stats_data
         }
+
+        # 发送WebSocket系统状态更新
+        emit_system_status_update(stats_data)
 
         return jsonify(result)
 
