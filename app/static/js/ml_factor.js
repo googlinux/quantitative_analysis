@@ -127,10 +127,10 @@ function showSection(sectionName) {
                 initStockSelection();
                 break;
             case 'portfolio-optimization':
-                // 组合优化页面初始化
+                initPortfolioOptimization();
                 break;
             case 'analysis':
-                // 分析报告页面初始化
+                initAnalysisPage();
                 break;
             case 'backtest':
                 initBacktestPage();
@@ -739,25 +739,523 @@ function proceedToOptimization() {
  * 导出选股结果
  */
 function exportSelectionResults() {
-    showNotification('导出功能开发中...', 'info');
+    if (!selectedStocks || selectedStocks.length === 0) {
+        showNotification('没有可导出的数据', 'warning');
+        return;
+    }
+
+    // 转换为CSV格式
+    const headers = ['排名', '股票代码', '股票名称', '综合得分', '预期收益率'];
+    const rows = selectedStocks.map((stock, index) => [
+        index + 1,
+        stock.ts_code || stock.stock_code,
+        stock.stock_name || '-',
+        stock.score,
+        stock.expected_return
+    ]);
+
+    let csv = headers.join(',') + '\n';
+    rows.forEach(row => {
+        csv += row.join(',') + '\n';
+    });
+
+    // 下载CSV文件
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `选股结果_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+
+    showNotification('导出成功', 'success');
 }
+
+// ========================================
+// 组合优化功能
+// ========================================
+
+/**
+ * 初始化组合优化页面
+ */
+function initPortfolioOptimization() {
+    // 检查是否有选股结果
+    if (!selectedStocks || selectedStocks.length === 0) {
+        document.getElementById('optimization-results').innerHTML =
+            '<p class="text-warning text-center">请先进行股票选择</p>';
+        return;
+    }
+
+    // 显示选中的股票信息
+    document.getElementById('optimization-results').innerHTML = `
+        <div class="alert alert-info">
+            已选择 ${selectedStocks.length} 只股票，可进行组合优化
+        </div>
+    `;
+
+    // 绑定表单提交事件
+    const form = document.getElementById('optimization-form');
+    if (form && !form.hasAttribute('data-bound')) {
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            await performPortfolioOptimization();
+        });
+        form.setAttribute('data-bound', 'true');
+    }
+}
+
+/**
+ * 执行组合优化
+ */
+async function performPortfolioOptimization() {
+    if (!selectedStocks || selectedStocks.length === 0) {
+        showNotification('请先进行股票选择', 'warning');
+        return;
+    }
+
+    const method = document.getElementById('optimization-method').value;
+    const maxWeight = parseFloat(document.getElementById('max-weight').value) / 100;
+    const riskAversion = parseFloat(document.getElementById('risk-aversion').value);
+
+    // 显示加载动画
+    document.getElementById('optimization-loading').style.display = 'block';
+    document.getElementById('optimization-results').innerHTML = '';
+
+    try {
+        // 构建预期收益率
+        const expectedReturns = {};
+        selectedStocks.forEach(stock => {
+            const code = stock.ts_code || stock.stock_code;
+            expectedReturns[code] = stock.expected_return || stock.score || 0;
+        });
+
+        const response = await fetch(`${API_BASE_URL}/portfolio/optimize`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                expected_returns: expectedReturns,
+                method: method,
+                constraints: {
+                    max_weight: maxWeight,
+                    risk_aversion: riskAversion
+                }
+            })
+        });
+
+        const data = await response.json();
+
+        document.getElementById('optimization-loading').style.display = 'none';
+
+        if (data.success || data.weights) {
+            optimizationResults = data;
+            renderOptimizationResults(data);
+            showNotification('组合优化完成', 'success');
+        } else {
+            showNotification('优化失败: ' + (data.error || data.message), 'danger');
+            document.getElementById('optimization-results').innerHTML =
+                '<p class="text-danger text-center">优化失败，请检查参数后重试</p>';
+        }
+    } catch (error) {
+        console.error('组合优化失败:', error);
+        document.getElementById('optimization-loading').style.display = 'none';
+        showNotification('组合优化失败', 'danger');
+        document.getElementById('optimization-results').innerHTML =
+            '<p class="text-danger text-center">优化失败，请检查参数后重试</p>';
+    }
+}
+
+/**
+ * 渲染优化结果
+ */
+function renderOptimizationResults(results) {
+    const resultsDiv = document.getElementById('optimization-results');
+
+    if (!results || !results.weights) {
+        resultsDiv.innerHTML = '<p class="text-muted text-center">无优化结果</p>';
+        return;
+    }
+
+    const weights = results.weights;
+    const metrics = results.metrics || {};
+
+    // 转换为数组并排序
+    const weightArray = Object.entries(weights).map(([code, weight]) => ({
+        code: code,
+        weight: weight,
+        stock_name: selectedStocks.find(s => (s.ts_code || s.stock_code) === code)?.stock_name || '-'
+    })).sort((a, b) => b.weight - a.weight);
+
+    let html = `
+        <div class="row mb-3">
+            <div class="col-md-4">
+                <div class="metric-card">
+                    <div class="metric-label">预期收益率</div>
+                    <div class="metric-value text-success">
+                        ${formatPercent(metrics.expected_return)}
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="metric-card">
+                    <div class="metric-label">预期风险</div>
+                    <div class="metric-value">
+                        ${formatPercent(metrics.expected_risk)}
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="metric-card">
+                    <div class="metric-label">夏普比率</div>
+                    <div class="metric-value">
+                        ${formatNumber(metrics.sharpe_ratio, 3)}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>股票代码</th>
+                        <th>股票名称</th>
+                        <th>权重</th>
+                        <th>权重条</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+
+    weightArray.forEach(item => {
+        const weightPercent = (item.weight * 100).toFixed(2);
+        html += `
+            <tr>
+                <td>${escapeHtml(item.code)}</td>
+                <td>${escapeHtml(item.stock_name)}</td>
+                <td><strong>${weightPercent}%</strong></td>
+                <td>
+                    <div class="progress">
+                        <div class="progress-bar" role="progressbar"
+                             style="width: ${weightPercent}%"
+                             aria-valuenow="${weightPercent}"
+                             aria-valuemin="0"
+                             aria-valuemax="100">
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+
+    html += `
+                </tbody>
+            </table>
+        </div>
+        <div class="mt-3">
+            <button class="btn btn-outline-secondary" onclick="exportOptimizationResults()">
+                <i class="bi bi-download"></i> 导出结果
+            </button>
+        </div>
+    `;
+
+    resultsDiv.innerHTML = html;
+
+    // 渲染权重分布饼图
+    renderWeightPieChart(weightArray);
+}
+
+/**
+ * 渲染权重分布饼图
+ */
+function renderWeightPieChart(weightArray) {
+    const container = document.getElementById('weight-pie-chart');
+    if (!container) return;
+
+    const chart = echarts.init(container);
+
+    const data = weightArray.map(item => ({
+        name: item.code,
+        value: item.weight * 100
+    }));
+
+    const option = {
+        title: {
+            text: '组合权重分布',
+            left: 'center'
+        },
+        tooltip: {
+            trigger: 'item',
+            formatter: '{b}: {c}% ({d}%)'
+        },
+        series: [
+            {
+                type: 'pie',
+                radius: ['40%', '70%'],
+                avoidLabelOverlap: false,
+                itemStyle: {
+                    borderRadius: 10,
+                    borderColor: '#fff',
+                    borderWidth: 2
+                },
+                label: {
+                    show: true,
+                    formatter: '{b}: {c}%'
+                },
+                data: data
+            }
+        ]
+    };
+
+    chart.setOption(option);
+}
+
+/**
+ * 导出优化结果
+ */
+function exportOptimizationResults() {
+    if (!optimizationResults || !optimizationResults.weights) {
+        showNotification('没有可导出的数据', 'warning');
+        return;
+    }
+
+    const weights = optimizationResults.weights;
+    const headers = ['股票代码', '股票名称', '权重'];
+    const rows = Object.entries(weights).map(([code, weight]) => {
+        const stock = selectedStocks.find(s => (s.ts_code || s.stock_code) === code);
+        return [code, stock?.stock_name || '-', weight];
+    });
+
+    let csv = headers.join(',') + '\n';
+    rows.forEach(row => {
+        csv += row.join(',') + '\n';
+    });
+
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `组合权重_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+
+    showNotification('导出成功', 'success');
+}
+
+// 全局变量存储优化结果
+let optimizationResults = null;
 
 // ========================================
 // 分析报告功能
 // ========================================
 
 /**
+ * 初始化分析页面
+ */
+function initAnalysisPage() {
+    // 清空之前的结果
+    document.getElementById('analysis-results').innerHTML = '';
+}
+
+/**
  * 生成因子分析报告
  */
-function generateFactorAnalysis() {
+async function generateFactorAnalysis() {
+    if (!factorsList || factorsList.length === 0) {
+        showNotification('请先加载因子列表', 'warning');
+        return;
+    }
+
     showNotification('正在生成因子分析报告...', 'info');
+
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const factorIds = factorsList.map(f => f.factor_id);
+
+        const response = await fetch(`${API_BASE_URL}/analysis/factor-contribution`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                trade_date: today,
+                factor_ids: factorIds
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            renderFactorAnalysisReport(data.data);
+            showNotification('报告生成成功', 'success');
+        } else {
+            showNotification('生成失败: ' + data.message, 'danger');
+        }
+    } catch (error) {
+        console.error('生成因子分析报告失败:', error);
+        showNotification('生成失败', 'danger');
+    }
+}
+
+/**
+ * 渲染因子分析报告
+ */
+function renderFactorAnalysisReport(data) {
+    const resultsDiv = document.getElementById('analysis-results');
+
+    let html = `
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-bar-chart"></i> 因子贡献度分析</h5>
+            </div>
+            <div class="card-body">
+                <div id="factor-contribution-chart" style="height: 400px;"></div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">因子详情</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>排名</th>
+                                <th>因子ID</th>
+                                <th>因子名称</th>
+                                <th>贡献度</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+    `;
+
+    // 合并因子数据
+    const factorData = data.factors.map((factorId, index) => {
+        const factor = factorsList.find(f => f.factor_id === factorId);
+        return {
+            factorId: factorId,
+            factorName: factor?.factor_name || factorId,
+            contribution: data.contributions[index]
+        };
+    }).sort((a, b) => b.contribution - a.contribution);
+
+    factorData.forEach((item, index) => {
+        html += `
+            <tr>
+                <td>${index + 1}</td>
+                <td>${escapeHtml(item.factorId)}</td>
+                <td>${escapeHtml(item.factorName)}</td>
+                <td><strong>${formatNumber(item.contribution, 2)}%</strong></td>
+            </tr>
+        `;
+    });
+
+    html += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    `;
+
+    resultsDiv.innerHTML = html;
+
+    // 渲染图表
+    renderFactorContributionChart('factor-contribution-chart', data);
 }
 
 /**
  * 生成行业分析报告
  */
-function generateSectorAnalysis() {
+async function generateSectorAnalysis() {
+    if (!selectedStocks || selectedStocks.length === 0) {
+        showNotification('请先进行股票选择', 'warning');
+        return;
+    }
+
     showNotification('正在生成行业分析报告...', 'info');
+
+    try {
+        const stockCodes = selectedStocks.map(s => s.ts_code || s.stock_code);
+
+        const response = await fetch(`${API_BASE_URL}/analysis/sector-distribution`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                stock_codes: stockCodes
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            renderSectorAnalysisReport(data.data);
+            showNotification('报告生成成功', 'success');
+        } else {
+            showNotification('生成失败: ' + data.message, 'danger');
+        }
+    } catch (error) {
+        console.error('生成行业分析报告失败:', error);
+        showNotification('生成失败', 'danger');
+    }
+}
+
+/**
+ * 渲染行业分析报告
+ */
+function renderSectorAnalysisReport(data) {
+    const resultsDiv = document.getElementById('analysis-results');
+
+    const totalStocks = data.reduce((sum, item) => sum + item.count, 0);
+
+    let html = `
+        <div class="card mb-3">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-pie-chart"></i> 行业分布分析</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div id="sector-pie-chart" style="height: 400px;"></div>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>行业统计</h6>
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>行业</th>
+                                        <th>数量</th>
+                                        <th>占比</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+    `;
+
+    data.forEach(item => {
+        const percentage = ((item.count / totalStocks) * 100).toFixed(2);
+        html += `
+            <tr>
+                <td>${escapeHtml(item.sector)}</td>
+                <td>${item.count}</td>
+                <td>${percentage}%</td>
+            </tr>
+        `;
+    });
+
+    html += `
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    resultsDiv.innerHTML = html;
+
+    // 渲染饼图
+    renderSectorPieChart('sector-pie-chart', data);
 }
 
 // ========================================
